@@ -29,6 +29,94 @@ const ICON = {
 };
 const STATUS = `<div class="statusbar"><span>9:41</span><svg viewBox="0 0 78 13" fill="#fff"><rect x="0" y="8" width="3.2" height="5" rx="1"/><rect x="5" y="5.5" width="3.2" height="7.5" rx="1"/><rect x="10" y="3" width="3.2" height="10" rx="1"/><rect x="15" y="0.5" width="3.2" height="12.5" rx="1"/><path d="M30.5 4.2a9.5 9.5 0 0 1 13 0l-1.4 1.5a7.5 7.5 0 0 0-10.2 0zM33.2 7a5.6 5.6 0 0 1 7.6 0l-1.4 1.5a3.6 3.6 0 0 0-4.8 0zM37 12.3l-2-2.1a2.9 2.9 0 0 1 4 0z"/><rect x="50.5" y="0.5" width="24" height="12" rx="3.6" fill="none" stroke="#fff" stroke-opacity=".4"/><rect x="52.5" y="2.5" width="20" height="8" rx="2"/><path d="M76 4.5v4a2 2 0 0 0 0-4z" fill-opacity=".4"/></svg></div>`;
 
+// ---------------- orb ----------------
+// Siri-style orb: luminous ribbons drawn additively on a canvas, clipped to a
+// circle. The glass shell and halo are CSS. One rAF loop drives every orb.
+const CAN_FILTER = 'filter' in CanvasRenderingContext2D.prototype;
+const RIBBONS = [
+  { c: '255,45,85',   off: -0.05, amp: 1.0, fq: 1.25, sp: 1.0,  th: 0.17 },
+  { c: '255,149,0',   off: 0.03,  amp: 0.8, fq: 1.7,  sp: -1.3, th: 0.12 },
+  { c: '94,92,230',   off: 0.07,  amp: 1.1, fq: 1.05, sp: 0.8,  th: 0.19 },
+  { c: '50,173,230',  off: 0.0,   amp: 0.9, fq: 2.05, sp: 1.6,  th: 0.11 },
+  { c: '191,90,242',  off: -0.07, amp: 0.7, fq: 1.5,  sp: -0.9, th: 0.15 },
+];
+const ORB_STATES = {
+  idle:      { level: 0.32, speed: 0.55, spin: 0 },
+  listening: { level: 0.62, speed: 1.1,  spin: 0.08 },
+  speaking:  { level: 0.85, speed: 1.6,  spin: 0.12 },
+  thinking:  { level: 0.55, speed: 2.3,  spin: 1.6 },
+};
+const ORBS = new Set();
+class Orb {
+  constructor(el, mini) {
+    this.el = el; this.mini = mini; el._orb = this;
+    this.c = document.createElement('canvas'); el.prepend(this.c);
+    const px = Math.round((mini ? 28 : 168) * Math.max(2, devicePixelRatio || 1));
+    this.c.width = this.c.height = px;
+    this.ctx = this.c.getContext('2d');
+    this.level = 0.4; this.kick = 0; this.rot = 0; this.phase = Math.random() * 10; this.last = 0;
+    this.setState(mini ? 'idle' : 'listening');
+    ORBS.add(this);
+  }
+  setState(s) { this.state = s; this.cfg = ORB_STATES[s]; }
+  pulse(n = 1) { this.kick = Math.min(1.2, this.kick + 0.55 * n); }
+  visible() { const s = this.el.closest('.screen,.sheet'); return !s || s.classList.contains('active') || s.classList.contains('on'); }
+  draw(t) {
+    const dt = this.last ? Math.min(0.05, t - this.last) : 0.016; this.last = t;
+    const cfg = this.cfg;
+    const noise = this.state === 'listening' ? (Math.sin(t * 6.3) + Math.sin(t * 10.7 + 1)) * 0.07 : 0;
+    this.level += (cfg.level + this.kick * 0.45 + noise - this.level) * Math.min(1, dt * 7);
+    this.kick *= Math.pow(0.04, dt);
+    // Thinking spins the ribbons; otherwise they sway gently around horizontal.
+    if (cfg.spin > 0.5) this.rot += cfg.spin * dt;
+    else { const sway = Math.sin(t * 0.35) * 0.3; const d = Math.atan2(Math.sin(sway - this.rot), Math.cos(sway - this.rot)); this.rot += d * Math.min(1, dt * 2.5); }
+    this.phase += cfg.speed * dt * (1 + this.kick * 0.6);
+    if (!this.mini) { const w = this.el.closest('.orb-wrap'); if (w) w.style.setProperty('--lvl', this.level.toFixed(3)); }
+    const ctx = this.ctx, W = this.c.width, R = W / 2, L = this.level;
+    ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.globalCompositeOperation = 'source-over'; ctx.filter = 'none';
+    ctx.clearRect(0, 0, W, W);
+    ctx.save();
+    ctx.beginPath(); ctx.arc(R, R, R, 0, Math.PI * 2); ctx.clip();
+    const base = ctx.createRadialGradient(R, R * 1.1, 0, R, R, R);
+    base.addColorStop(0, '#120f22'); base.addColorStop(0.6, '#06060b'); base.addColorStop(1, '#000');
+    ctx.fillStyle = base; ctx.fillRect(0, 0, W, W);
+    ctx.translate(R, R); ctx.rotate(this.rot);
+    ctx.globalCompositeOperation = 'lighter';
+    const steps = this.mini ? 24 : 64;
+    const ribbon = (rb, i, white) => {
+      const pts = [];
+      for (let k = 0; k <= steps; k++) {
+        const u = k / steps, x = -R + u * 2 * R;
+        const env = Math.pow(Math.sin(Math.PI * u), 1.6);
+        const y = R * (rb.off * 2.3 + rb.amp * L * 0.36 * env * Math.sin(rb.fq * (x / R) * Math.PI + this.phase * rb.sp * 2.2 + i * 1.7));
+        const th = R * rb.th * env * (0.5 + L * 1.1);
+        pts.push([x, y, th]);
+      }
+      ctx.beginPath();
+      pts.forEach(([x, y, th], k) => (k ? ctx.lineTo(x, y - th) : ctx.moveTo(x, y - th)));
+      for (let k = pts.length - 1; k >= 0; k--) { const [x, y, th] = pts[k]; ctx.lineTo(x, y + th); }
+      ctx.closePath();
+      const g = ctx.createLinearGradient(-R, 0, R, 0);
+      const a = white ? 0.7 : 0.72;
+      g.addColorStop(0, `rgba(${rb.c},0)`); g.addColorStop(0.3, `rgba(${rb.c},${a * 0.6})`); g.addColorStop(0.5, `rgba(${rb.c},${a})`); g.addColorStop(0.7, `rgba(${rb.c},${a * 0.6})`); g.addColorStop(1, `rgba(${rb.c},0)`);
+      ctx.fillStyle = g; ctx.fill();
+    };
+    const blur = (f) => { if (CAN_FILTER) ctx.filter = `blur(${(R * f).toFixed(1)}px)`; };
+    blur(0.05); RIBBONS.forEach((rb, i) => ribbon(rb, i));
+    blur(0.02); ribbon({ c: '255,255,255', off: 0.005, amp: 0.85, fq: 1.4, sp: 1.2, th: 0.028 }, 9, true);
+    ctx.restore();
+  }
+}
+function mountOrbs(root = document) {
+  root.querySelectorAll('.orb:not([data-on]), .mini-orb:not([data-on])').forEach((el) => { el.dataset.on = '1'; new Orb(el, el.classList.contains('mini-orb')); });
+}
+function setOrb(state) { const el = $('#speaking .orb'); if (el && el._orb) el._orb.setState(state); }
+function pulseOrb(n) { const el = $('#speaking .orb'); if (el && el._orb) el._orb.pulse(n); }
+(function loop(ts) {
+  for (const o of ORBS) { if (!o.el.isConnected) { ORBS.delete(o); continue; } if (o.visible()) o.draw(ts / 1000); }
+  requestAnimationFrame(loop);
+})(0);
+
 // ---------------- state ----------------
 const fresh = () => ({
   aliases: clone(DEFAULT_ALIASES),
@@ -156,12 +244,13 @@ function renderSpeaking() {
     <div class="edge-glow"></div>
     <div class="top"><button class="circle" data-act="home" aria-label="Back">${ICON.back}</button><button class="circle" aria-label="More">${ICON.more}</button></div>
     <div class="transcript listening" id="transcript">Listening…</div>
-    <div class="orb-wrap listening" id="orbWrap"><div class="orb"><i></i><i></i><i></i><i></i></div></div>
+    <div class="orb-wrap" id="orbWrap"><div class="orb-halo"></div><div class="orb"><div class="shell"></div><div class="rim"></div></div></div>
     <div class="status-line" id="statusLine"></div>
     <div class="prompts" id="prompts">
       <div class="lbl"><span>Try saying</span>${SR ? `<button data-act="realmic">${ICON.mic} Use my voice</button>` : ''}</div>
       <div class="rail">${PROMPTS.map((p, i) => `<button class="prompt tap" data-prompt="${i}">${esc(p.say)}</button>`).join('')}</div>
     </div>`;
+  mountOrbs($('#speaking'));
 }
 let speakRun = 0;
 function openSpeaking() {
@@ -177,7 +266,8 @@ async function speak(text, label, { typed = true } = {}) {
     const words = text.split(' ');
     tr.innerHTML = words.map((w) => `<span class="w">${esc(w)}</span>`).join(' ');
     const els = tr.querySelectorAll('.w');
-    for (const el of els) { if (run !== speakRun) return; el.classList.add('on'); await wait(170 + Math.random() * 90); }
+    setOrb('speaking');
+    for (const el of els) { if (run !== speakRun) return; el.classList.add('on'); pulseOrb(0.6 + Math.random() * 0.6); await wait(170 + Math.random() * 90); }
   } else tr.textContent = text;
   await wait(350); if (run !== speakRun) return;
   await think(parse(text), run);
@@ -185,7 +275,7 @@ async function speak(text, label, { typed = true } = {}) {
   runQuery(text, label);
 }
 async function think(p, run) {
-  const ow = $('#orbWrap'); ow.className = 'orb-wrap thinking';
+  setOrb('thinking');
   const sl = $('#statusLine');
   const terms = [...p.people.map((id) => p.personWord[id]), p.unknown, ...p.scenes.map((s) => SCENE_LABEL[s]), ...p.places.filter((x, i, a) => !(x === 'Italy' && a.includes('Positano')))].filter(Boolean);
   const steps = [terms.length ? 'Understood ' + terms.map((x) => '“' + x + '”').join(' · ') : 'Understanding…', p.people.length || p.unknown ? 'Matching faces…' : 'Reading what’s in each photo…', 'Ranking 5,000 photos…'];
@@ -198,13 +288,13 @@ function realMic() {
     const tr = $('#transcript'); $('#prompts').classList.add('hide');
     tr.classList.add('listening'); tr.textContent = 'Listening… speak now';
     let finalText = '';
-    rec.onresult = (e) => { const t = Array.from(e.results).map((r) => r[0].transcript).join(' '); tr.classList.remove('listening'); tr.textContent = t; finalText = t; };
+    rec.onresult = (e) => { const t = Array.from(e.results).map((r) => r[0].transcript).join(' '); tr.classList.remove('listening'); tr.textContent = t; finalText = t; setOrb('speaking'); pulseOrb(1); };
     rec.onerror = (e) => { toast(`Mic isn’t available here (${e.error}). Pick a prompt instead.`); resetListening(); };
     rec.onend = () => { if (finalText.trim()) speak(finalText.trim(), cap(finalText.trim()), { typed: false }); else resetListening(); };
     rec.start();
   } catch (err) { toast('Mic isn’t available here. Pick a prompt instead.'); resetListening(); }
 }
-function resetListening() { const tr = $('#transcript'); if (!tr) return; tr.classList.add('listening'); tr.textContent = 'Listening…'; $('#prompts').classList.remove('hide'); }
+function resetListening() { const tr = $('#transcript'); if (!tr) return; setOrb('listening'); tr.classList.add('listening'); tr.textContent = 'Listening…'; $('#prompts').classList.remove('hide'); }
 
 // ---------------- results ----------------
 function runQuery(text, label) {
@@ -261,6 +351,7 @@ function renderResults() {
       <div class="querybar"><div class="qtoken"><span>${esc(p.label)} <button data-act="home" aria-label="Clear search" style="display:inline-grid">${ICON.xsmall}</button></span></div><button class="xbtn" data-act="home" aria-label="Clear">${ICON.xsmall}</button></div>
     </div>`;
   for (const k of S.off) { const c = $(`[data-chip="${k}"]`); if (c) c.classList.add('off'); }
+  mountOrbs($('#results'));
 }
 function toggleChip(k) {
   S.off.has(k) ? S.off.delete(k) : S.off.add(k);
@@ -289,6 +380,7 @@ function renderTag() {
     <div class="card"><div class="k">What do you call her? Any of these will find her</div>
       <div class="aliases">${Object.entries(S.aliasOn).map(([w, on]) => `<button class="alias ${on ? 'on' : ''}" data-alias="${esc(w)}">${on ? ICON.check : ''}${esc(w)}</button>`).join('')}<button class="alias" data-act="addAlias">${ICON.plus} Add</button></div>
     </div>`;
+  mountOrbs($('#tagSheet'));
 }
 function confirmTag() {
   const id = S.tagSel, words = Object.entries(S.aliasOn).filter(([, on]) => on).map(([w]) => w.toLowerCase());
