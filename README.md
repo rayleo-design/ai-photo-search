@@ -12,8 +12,17 @@ An interactive prototype of conversational search in the iPhone Photos app. It w
 4. **Unknown person.** The first time you say "mom", Lumi doesn't know who that is. You get a best guess and "Show me".
 5. **Tag person.** Pick Mom's face and the names you use for her. The same search then reruns, and "mom" now works.
 6. **Save album.** The bookmark next to the chips creates a live album: suggested cover, editable title, auto-add and share toggles.
+7. **Not these?** This link on a result opens a refinement menu: Earlier that evening, Near buildings, Closer up, Just two of us, and A different trip. "A different trip" leads to **no results**, with the closest match and other albums.
+8. **Refine.** Switch a chip off (for example Mom) to widen to "6 sunset photos from your Italy trip". Tap the search bar to **add to this search**: pick a suggestion or type, e.g. "closer". That gives "1 sunset photo… Narrowed down to closer ups."
+9. **Select → Share.** Select picks the photos; the share icon opens the share sheet. It has people, apps, **Keep as an album** and **Live Album**.
+10. **Vague search.** "Pic from that thing at Rohan's" → "I know Rohan but not which 'thing'". Pick an event, or tap a memory prompt to add a clue.
 
-The main demo path is "Show me sunset photo with mom in Italy" → Show me → ✓ → bookmark → ✓.
+The main demo path:
+
+1. Say "Show me sunset photo with mom in Italy".
+2. Tap **Show me**, then ✓.
+3. Tap **Not these?**, then **Closer up**.
+4. Tap **Select**, then **Share**.
 
 Shortcuts: **R** restarts the demo, **Esc** closes sheets. **•••** on results has "Restart demo" and "Forget who Mom is".
 
